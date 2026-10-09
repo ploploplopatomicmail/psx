@@ -3,6 +3,7 @@ pip install playwright
 playwright install chromium
 python craw.py
 """
+import csv
 import json
 import random
 import re
@@ -15,9 +16,23 @@ API = (
     "&tags=Non-nude,Non+nude,Nonnude&tagMode=OR&expandTags=false"
 )
 PROXY = None  # e.g. "http://47.89.184.18:3128" ; None = connect directly
-OUTPUT = "videos.json"
+OUTPUT = "videos.csv"
 MAX_RETRIES = 3
 MAX_VIDEOS = 2000  # stop crawling once more than this many videos are collected
+
+# CSV settings
+CSV_COLUMNS = [
+    "id",
+    "title",
+    "description",
+    "tags",
+    "videoUrl",
+    "thumbnailUrl",
+    "durationSeconds",
+    "views",
+    "date",
+]
+TAG_SEPARATOR = "|"  # tags list is joined into a single CSV cell with this separator
 
 # Candidate field names (the first one found is used). Adjust if your API differs.
 VIDEO_URL_KEYS = ("videoUrl", "video_url", "url", "hlsUrl", "streamUrl", "src")
@@ -127,6 +142,20 @@ def slim(v):
     }
 
 
+def save_csv(rows, path):
+    """Write the collected videos to a CSV file (UTF-8 with BOM so Excel opens it correctly)."""
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            row = dict(row)
+            tags = row.get("tags")
+            if isinstance(tags, (list, tuple)):
+                row["tags"] = TAG_SEPARATOR.join(str(t) for t in tags)
+            # None -> empty cell
+            writer.writerow({k: ("" if row.get(k) is None else row.get(k)) for k in CSV_COLUMNS})
+
+
 def fetch_page(page, n):
     """Open one API page in the browser and return the parsed JSON."""
     for attempt in range(1, MAX_RETRIES + 1):
@@ -192,8 +221,7 @@ def main():
 
         browser.close()
 
-    with open(OUTPUT, "w", encoding="utf-8") as f:
-        json.dump(list(videos.values()), f, ensure_ascii=False, indent=2)
+    save_csv(videos.values(), OUTPUT)
     print(f"Saved {len(videos)} videos to {OUTPUT}")
 
 

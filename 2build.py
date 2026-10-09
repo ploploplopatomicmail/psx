@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Build a Hugo video site from a JSON file.
+Build a Hugo video site from videos.csv (the file written by 1craw.py).
 
-    python 2build.py "videos - Copy.json" --out site --base-url https://example.com/ --build
+    python 2build.py
+
+No command-line arguments: every setting is a constant in the CONFIGURATION
+block below. Edit the constants, then just run the file.
 
 Features
   * Fuse.js search over title / tags / description, index shipped gzipped
@@ -12,12 +15,24 @@ Features
     VideoObject + BreadcrumbList, video sitemap, robots.txt
 Requires Hugo >= 0.128 (uses [pagination] pagerSize).
 """
-import argparse, gzip, json, re, shutil, subprocess, sys, unicodedata, urllib.request
+import csv, gzip, json, re, shutil, subprocess, sys, unicodedata, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 FUSE_CDN = "https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"
+
+# --------------------------------------------------------------------------- CONFIGURATION
+BASE_DIR = Path(__file__).resolve().parent
+CSV_FILE = BASE_DIR / "videos.csv"        # input, written by 1craw.py
+OUT_DIR = BASE_DIR / "site"               # Hugo project directory
+BASE_URL = "https://example.com/"
+SITE_TITLE = "VideoHub"
+TAGLINE = "Watch the latest videos"
+PAGE_SIZE = 36                            # videos per page on the homepage
+VENDOR_FUSE = Trủe                       # True = download Fuse.js into static/js instead of using the CDN
+BUILD = True                              # True = run `hugo --minify` afterwards
+TAG_SEPARATOR = "|"                       # separator used inside the "tags" CSV column
 
 # --------------------------------------------------------------------------- helpers
 def slugify(text, limit=60):
@@ -30,6 +45,55 @@ def oid_date(oid):  # Mongo ObjectId: first 4 bytes = unix timestamp
         return datetime.fromtimestamp(int(oid[:8], 16), timezone.utc)
     except Exception:
         return datetime.now(timezone.utc)
+
+def parse_date(value, oid=""):
+    """CSV `date` column (ISO 8601, e.g. 2026-10-07T14:09:11.368Z) -> aware UTC datetime."""
+    text = (value or "").strip()
+    if text:
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return oid_date(oid)   # fallback when the date is missing / unreadable
+
+def fmt_iso(dt):           # 2026-10-07T14:09:11.368Z
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+def fmt_stamp(dt):         # YYYYMMDDhhmmssSSS
+    return dt.strftime("%Y%m%d%H%M%S") + f"{dt.microsecond // 1000:03d}"
+
+def to_int(x):
+    try:
+        return int(float(x))
+    except (TypeError, ValueError):
+        return 0
+
+def load_videos(path):
+    """Read videos.csv. Rows sharing an id are merged into one video and the
+    view count is updated to the value of the later row."""
+    by_id, dups = {}, 0
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            vid = (row.get("id") or "").strip()
+            if not vid:
+                continue
+            row["id"] = vid
+            row["tags"] = [t.strip() for t in (row.get("tags") or "").split(TAG_SEPARATOR) if t.strip()]
+            row["durationSeconds"] = to_int(row.get("durationSeconds"))
+            row["views"] = to_int(row.get("views"))
+            old = by_id.get(vid)
+            if old is None:
+                by_id[vid] = row
+                continue
+            dups += 1
+            old["views"] = row["views"]                  # duplicate id -> update views
+            for k, val in row.items():                   # fill anything the first row lacked
+                if k != "views" and not old.get(k) and val:
+                    old[k] = val
+    videos = [v for v in by_id.values() if v.get("videoUrl")]
+    print(f"{len(by_id)} unique ids ({dups} duplicate rows -> views updated)")
+    return videos
 
 def fmt_dur(s):
     h, r = divmod(int(s), 3600); m, sec = divmod(r, 60)
@@ -48,10 +112,13 @@ def write(path, text):
 
 # --------------------------------------------------------------------------- content
 def build_content(videos, out, page_size):
-    videos = sorted(videos, key=lambda v: (oid_date(v["id"]), v["id"]), reverse=True)
+    for v in videos:
+        v["_dt"] = parse_date(v.get("date"), v["id"])
+    videos = sorted(videos, key=lambda v: (v["_dt"], v["id"]), reverse=True)   # date DESC: newest first
     seen, slugs = set(), []
     for v in videos:
-        s = f"{slugify(v.get('title', '')) or 'video'}-{v['id'][-6:]}"
+        # file name: <YYYYMMDDhhmmssSSS>-<title>-<id6>.md
+        s = f"{fmt_stamp(v['_dt'])}-{slugify(v.get('title', '')) or 'video'}-{v['id'][-6:]}"
         if s in seen:
             s = f"{s}-{v['id']}"
         seen.add(s); slugs.append(s)
@@ -75,7 +142,7 @@ def build_content(videos, out, page_size):
             "title": title,
             "description": meta_desc,
             "has_desc": has_desc,
-            "date": oid_date(v["id"]).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "date": fmt_iso(v["_dt"]),
             "tags": tags,
             "video_url": v.get("videoUrl", ""),
             "thumbnail": v.get("thumbnailUrl", ""),
@@ -147,6 +214,7 @@ T["layouts/_default/baseof.html"] = r"""<!doctype html>
 """
 
 T["layouts/partials/header.html"] = r"""<header class="top no-swipe">
+  {{ if and .IsPage (eq .Type "videos") }}<a id="back" class="back" href="{{ "" | relURL }}" aria-label="Back to home and search" title="Back (Esc)">&#8592;</a>{{ end }}
   <a class="brand" href="{{ "" | relURL }}">{{ site.Title }}</a>
   <form class="search" action="{{ "" | relURL }}" method="get" role="search">
     <input id="q" type="search" name="q" placeholder="Search title, tags, description…" autocomplete="off" aria-label="Search videos">
@@ -154,8 +222,8 @@ T["layouts/partials/header.html"] = r"""<header class="top no-swipe">
 </header>
 """
 
-T["layouts/partials/pg.html"] = r"""{{- $src := .Pages -}}
-{{- if .IsHome }}{{ $src = where site.RegularPages "Section" "videos" }}{{ end -}}
+T["layouts/partials/pg.html"] = r"""{{- $src := .Pages.ByDate.Reverse -}}
+{{- if .IsHome }}{{ $src = (where site.RegularPages "Section" "videos").ByDate.Reverse }}{{ end -}}
 {{- return (.Paginate $src) -}}
 """
 
@@ -276,6 +344,7 @@ T["layouts/_default/list.html"] = r"""{{ define "seo" }}{{ partial "seo-list.htm
   {{ partial "pager.html" $pg }}
 {{ end }}
 </main>
+<script>document.addEventListener('click',function(e){if(e.target.closest('a.card')){try{sessionStorage.removeItem('ctx')}catch(_){}}});</script>
 {{ end }}
 """
 
@@ -286,7 +355,7 @@ T["layouts/videos/single.html"] = r"""{{ define "bodyclass" }}vp{{ end }}
 {{ end }}
 {{ define "main" }}
 <main class="player" data-next="{{ with .Params.next_slug }}{{ printf "videos/%s/" . | relURL }}{{ end }}" data-prev="{{ with .Params.prev_slug }}{{ printf "videos/%s/" . | relURL }}{{ end }}">
-  <video src="{{ .Params.video_url }}" poster="{{ .Params.thumbnail }}" autoplay muted loop playsinline preload="metadata"></video>
+  <video src="{{ .Params.video_url }}" poster="{{ .Params.thumbnail }}" autoplay muted loop playsinline preload="auto"></video>
   <article class="info">
     <h1>{{ .Title }}</h1>
     {{ if .Params.has_desc }}<p>{{ .Description }}</p>{{ end }}
@@ -337,6 +406,7 @@ a{color:inherit;text-decoration:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .top{position:sticky;top:0;z-index:20;display:flex;gap:12px;align-items:center;padding:10px 12px;background:rgba(14,15,18,.92);backdrop-filter:blur(8px)}
 .brand{font-weight:700;letter-spacing:-.02em;white-space:nowrap}
+.back{flex:none;display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.16);font-size:20px;line-height:1}
 .search{flex:1;margin:0}
 .search input{width:100%;padding:9px 14px;border-radius:999px;border:1px solid #2a2c35;background:var(--panel);color:var(--fg);font:inherit}
 .wrap{max-width:1400px;margin:0 auto;padding:8px 12px 40px}
@@ -386,7 +456,7 @@ T["static/js/search.js"] = r"""(() => {
   const root = document.body.dataset.root, fuseSrc = document.body.dataset.fuse;
   const grid = $('#grid'), more = $('#more'), pager = $('#pager'), status = $('#status'), input = $('#q');
   const BATCH = 36, original = grid.innerHTML;
-  let fuse, loading, hits = [], shown = 0, seq = 0, timer;
+  let fuse, loading, hits = [], shown = 0, seq = 0, timer, active = false;
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const card = v => `<a class="card" href="${root}${esc(v.u)}"><span class="thumb"><img src="${esc(v.i)}" alt="${esc(v.t)}" loading="lazy" decoding="async"><b class="dur">${esc(v.l)}</b></span><span class="t">${esc(v.t)}</span><span class="m">${(v.v || 0).toLocaleString()} views</span></a>`;
@@ -430,14 +500,14 @@ T["static/js/search.js"] = r"""(() => {
     term = term.trim();
     if (push) history.replaceState(null, '', term ? `?q=${encodeURIComponent(term)}` : location.pathname);
     if (!term) {
-      grid.innerHTML = original; more.hidden = true; status.hidden = true;
+      active = false; grid.innerHTML = original; more.hidden = true; status.hidden = true;
       if (pager) pager.hidden = false;
       return;
     }
     status.hidden = false; status.textContent = 'Searching…';
     await init();
     if (my !== seq) return;               // a newer query superseded this one
-    hits = fuse.search(term).map(r => r.item);
+    hits = fuse.search(term).map(r => r.item); active = true;
     shown = 0; grid.innerHTML = '';
     if (pager) pager.hidden = true;
     status.textContent = hits.length ? `${hits.length.toLocaleString()} results for “${term}”` : `No results for “${term}”`;
@@ -449,6 +519,17 @@ T["static/js/search.js"] = r"""(() => {
   input.closest('form').addEventListener('submit', e => { e.preventDefault(); clearTimeout(timer); run(input.value, true); });
   more.addEventListener('click', renderMore);
 
+  // remember which list a video was opened from, so next / previous follow that list
+  const remember = ev => {
+    if (!ev.target.closest('a.card')) return;
+    try {
+      if (active) sessionStorage.setItem('ctx', JSON.stringify(hits.map(h => h.u)));  // search results
+      else sessionStorage.removeItem('ctx');                                          // home = default order
+    } catch (err) {}
+  };
+  grid.addEventListener('click', remember);
+  grid.addEventListener('auxclick', remember);
+
   const initial = new URLSearchParams(location.search).get('q');
   if (initial) { input.value = initial; run(initial, false); }
 })();
@@ -456,18 +537,59 @@ T["static/js/search.js"] = r"""(() => {
 
 T["static/js/swipe.js"] = r"""(() => {
   const p = document.querySelector('.player'), v = p.querySelector('video');
-  const { next, prev } = p.dataset;
+  let { next, prev } = p.dataset;
   const mute = document.getElementById('mute'), bar = document.getElementById('bar');
+  const back = document.getElementById('back');
   let leaving = false;
+
+  // remember whether we arrived from a list / search page of this site
+  try {
+    let same = false, fromVideo = false;
+    if (document.referrer) {
+      const u = new URL(document.referrer);
+      same = u.origin === location.origin;
+      fromVideo = /\/videos\/[^/]+\/?$/.test(u.pathname);
+    }
+    if (!same) { sessionStorage.setItem('fromList', '0'); sessionStorage.removeItem('ctx'); }
+    else if (!fromVideo) sessionStorage.setItem('fromList', '1');
+  } catch (e) {}
+
+  // next / previous follow the list the user came from (search results); otherwise newest-first order
+  try {
+    const list = JSON.parse(sessionStorage.getItem('ctx') || 'null');
+    const m = location.pathname.match(/videos\/([^/]+)\/?$/);
+    const i = Array.isArray(list) && m ? list.indexOf('videos/' + m[1] + '/') : -1;
+    if (i >= 0) {
+      const root = document.body.dataset.root || '/';
+      next = i + 1 < list.length ? root + list[i + 1] : '';
+      prev = i > 0 ? root + list[i - 1] : '';
+      document.querySelectorAll('link[rel=prefetch]').forEach(l => l.remove());
+      [next, prev].forEach(u => {
+        if (!u) return;
+        const l = document.createElement('link'); l.rel = 'prefetch'; l.href = u; document.head.appendChild(l);
+      });
+    }
+  } catch (e) {}
+
+  // back to the page we came from (keeps page number / ?q= search / scroll); otherwise home
+  function goBack() {
+    let ok = false;
+    try { ok = sessionStorage.getItem('fromList') === '1' && history.length > 1; } catch (e) {}
+    if (ok) history.back(); else location.href = back ? back.href : '/';
+  }
+  if (back) back.addEventListener('click', e => { e.preventDefault(); goBack(); });
 
   function go(url, dir) {
     if (!url || leaving) return;
     leaving = true;
     p.classList.add(dir > 0 ? 'out-up' : 'out-down');
-    setTimeout(() => { location.href = url; }, 160);
+    setTimeout(() => { location.replace(url); }, 160);   // replace: swiping through videos does not pile up history
   }
   const goNext = () => go(next, 1), goPrev = () => go(prev, -1);
-  addEventListener('pageshow', () => { leaving = false; p.classList.remove('out-up', 'out-down'); });
+  addEventListener('pageshow', e => {
+    leaving = false; p.classList.remove('out-up', 'out-down');
+    if (e.persisted && v.paused) autoplay();     // back button restored the page from cache
+  });
 
   // touch: swipe up -> next video, swipe down -> previous video
   let sx, sy, st, track = false;
@@ -495,13 +617,15 @@ T["static/js/swipe.js"] = r"""(() => {
     else if (e.key === 'ArrowUp' || e.key === 'k') goPrev();
     else if (e.key === ' ') { e.preventDefault(); toggle(); }
     else if (e.key === 'm') setMuted(!v.muted);
+    else if (e.key === 'Escape') goBack();
   });
   document.getElementById('down').onclick = goNext;
   document.getElementById('up').onclick = goPrev;
 
   // playback
   const toggle = () => (v.paused ? v.play() : v.pause());
-  p.addEventListener('click', e => { if (!e.target.closest('.no-swipe')) toggle(); });
+  let skipClick = false;
+  p.addEventListener('click', e => { if (!skipClick && !e.target.closest('.no-swipe')) toggle(); });
   v.addEventListener('pause', () => p.classList.add('paused'));
   v.addEventListener('play', () => p.classList.remove('paused'));
   v.addEventListener('timeupdate', () => { bar.firstChild.style.width = (v.currentTime / (v.duration || 1) * 100) + '%'; });
@@ -514,50 +638,55 @@ T["static/js/swipe.js"] = r"""(() => {
   mute.onclick = () => setMuted(!v.muted);
   let wantSound = false;
   try { wantSound = sessionStorage.getItem('muted') === '0'; } catch (e) {}
-  if (wantSound) {   // keep sound on between videos if the browser allows it
-    v.muted = false;
-    v.play().then(() => setMuted(false)).catch(() => { v.muted = true; v.play(); });
+
+  // autoplay: try with sound if the viewer unmuted earlier, then muted; if the browser still
+  // blocks it, show the play icon and start on the first tap / key press
+  async function autoplay() {
+    if (wantSound) {                      // viewer unmuted earlier: try with sound first
+      try { v.muted = false; await v.play(); setMuted(false); return; } catch (e) {}
+    }
+    try { v.muted = true; mute.textContent = '🔇'; await v.play(); return; } catch (e) {}
+    p.classList.add('paused');            // blocked: show the play icon, start on first interaction
+    const kick = () => {
+      skipClick = true; setTimeout(() => { skipClick = false; }, 400);
+      v.play().catch(() => {});
+    };
+    ['pointerdown', 'touchstart', 'keydown'].forEach(t => addEventListener(t, kick, { once: true, passive: true }));
   }
+  autoplay();
 })();
 """
 
 # --------------------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("json_file")
-    ap.add_argument("--out", default="site", help="Hugo project directory (default: site)")
-    ap.add_argument("--base-url", default="https://example.com/")
-    ap.add_argument("--title", default="VideoHub")
-    ap.add_argument("--tagline", default="Watch the latest videos")
-    ap.add_argument("--page-size", type=int, default=36)
-    ap.add_argument("--vendor-fuse", action="store_true", help="download Fuse.js into static/js instead of using the CDN")
-    ap.add_argument("--build", action="store_true", help="run `hugo --minify` afterwards")
-    a = ap.parse_args()
+    out = OUT_DIR
+    if not CSV_FILE.exists():
+        sys.exit(f"CSV file not found: {CSV_FILE}")
 
-    videos = json.loads(Path(a.json_file).read_text(encoding="utf-8-sig"))
-    videos = [v for v in videos if v.get("id") and v.get("videoUrl")]
-    out = Path(a.out)
+    videos = load_videos(CSV_FILE)
     print(f"{len(videos)} videos")
 
     fuse_src = FUSE_CDN
-    if a.vendor_fuse:
+    if VENDOR_FUSE:
         dest = out / "static/js/fuse.min.js"; dest.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(FUSE_CDN, dest); fuse_src = "js/fuse.min.js"
 
     origin = "{0.scheme}://{0.netloc}".format(urlparse(videos[0].get("thumbnailUrl") or videos[0]["videoUrl"])) if videos else ""
     write(out / "hugo.toml", CONFIG.format(
-        base=q(a.base_url.rstrip("/") + "/"), title=q(a.title), size=a.page_size,
-        tagline=q(a.tagline), desc=q(f"{a.title}: {a.tagline}. Browse and search {len(videos)} videos by title, tag and description."),
+        base=q(BASE_URL.rstrip("/") + "/"), title=q(SITE_TITLE), size=PAGE_SIZE,
+        tagline=q(TAGLINE), desc=q(f"{SITE_TITLE}: {TAGLINE}. Browse and search {len(videos)} videos by title, tag and description."),
         origin=q(origin), fuse=q(fuse_src)))
     for path, text in T.items():
         write(out / path, text)
 
-    index = build_content(videos, out, a.page_size)
+    index = build_content(videos, out, PAGE_SIZE)
     write_search_index(index, out)
 
-    if a.build:
+    if BUILD:
         if not shutil.which("hugo"):
-            sys.exit("hugo not found in PATH - install it from https://gohugo.io/installation/")
+            print("\nhugo not found in PATH - install it from https://gohugo.io/installation/ "
+                  "(site files were generated, only the build step was skipped)")
+            return
         subprocess.run(["hugo", "--minify", "-s", str(out)], check=True)
         print(f"built -> {out/'public'}")
     else:

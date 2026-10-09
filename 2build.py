@@ -30,7 +30,7 @@ BASE_URL = "https://example.com/"
 SITE_TITLE = "VideoHub"
 TAGLINE = "Watch the latest videos"
 PAGE_SIZE = 36                            # videos per page on the homepage
-VENDOR_FUSE = Trủe                       # True = download Fuse.js into static/js instead of using the CDN
+VENDOR_FUSE = True                       # True = download Fuse.js into static/js instead of using the CDN
 BUILD = True                              # True = run `hugo --minify` afterwards
 TAG_SEPARATOR = "|"                       # separator used inside the "tags" CSV column
 

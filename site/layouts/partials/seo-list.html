@@ -1,0 +1,9 @@
+{{ if eq .Kind "taxonomy" }}
+{{ partial "seo.html" (dict "page" . "canon" .Permalink) }}
+{{ else }}
+{{ $pg := partial "pg.html" . }}
+{{ $suffix := "" }}{{ if gt $pg.PageNumber 1 }}{{ $suffix = printf " – Page %d" $pg.PageNumber }}{{ end }}
+{{ $prev := "" }}{{ if $pg.HasPrev }}{{ $prev = $pg.Prev.URL | absURL }}{{ end }}
+{{ $next := "" }}{{ if $pg.HasNext }}{{ $next = $pg.Next.URL | absURL }}{{ end }}
+{{ partial "seo.html" (dict "page" . "canon" ($pg.URL | absURL) "suffix" $suffix "prev" $prev "next" $next) }}
+{{ end }}

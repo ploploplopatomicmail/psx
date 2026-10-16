@@ -1,0 +1,7 @@
+<header class="top no-swipe">
+  {{ if and .IsPage (eq .Type "videos") }}<a id="back" class="back" href="{{ "" | relURL }}" aria-label="Back to home and search" title="Back (Esc)">&#8592;</a>{{ end }}
+  <a class="brand" href="{{ "" | relURL }}">{{ site.Title }}</a>
+  <form class="search" action="{{ "" | relURL }}" method="get" role="search">
+    <input id="q" type="search" name="q" placeholder="Search title, tags, description…" autocomplete="off" aria-label="Search videos">
+  </form>
+</header>

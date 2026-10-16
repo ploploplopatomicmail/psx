@@ -1,0 +1,12 @@
+{{ define "seo" }}{{ partial "seo-list.html" . }}{{ end }}
+{{ define "main" }}
+{{ $pg := partial "pg.html" . }}
+<main class="wrap">
+  <h1 class="sr">{{ site.Title }}</h1>
+  <p id="status" class="status" role="status" hidden></p>
+  <div class="grid" id="grid">{{ range $i, $p := $pg.Pages }}{{ partial "card.html" (dict "p" $p "eager" (lt $i 4)) }}{{ end }}</div>
+  <button id="more" class="more" type="button" hidden>Load more</button>
+  {{ partial "pager.html" $pg }}
+</main>
+<script src="{{ "js/search.js" | relURL }}" defer></script>
+{{ end }}

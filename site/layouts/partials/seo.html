@@ -1,0 +1,58 @@
+{{- $page := .page -}}{{- $canon := .canon -}}
+{{- $isVideo := and $page.IsPage (eq $page.Type "videos") -}}
+{{- $site := site.Title -}}
+{{- $title := printf "%s | %s" $page.Title $site -}}
+{{- $desc := site.Params.description -}}
+{{- if $page.IsHome }}{{ $title = printf "%s – %s" $site site.Params.tagline }}
+{{- else if eq $page.Kind "term" }}{{ $title = printf "%s videos | %s" $page.Title $site }}{{ $desc = printf "Watch %s videos on %s." $page.Title $site }}
+{{- else if $isVideo }}{{ $desc = $page.Description }}
+{{- end -}}
+<title>{{ $title }}{{ .suffix }}</title>
+<meta name="description" content="{{ $desc | truncate 160 }}">
+<link rel="canonical" href="{{ $canon }}">
+<meta name="robots" content="index,follow,max-image-preview:large,max-video-preview:-1,max-snippet:-1">
+{{ if site.Params.adult }}<meta name="rating" content="adult">
+<meta name="RATING" content="RTA-5042-1996-1400-1577-RTA">{{ end }}
+{{ with .prev }}<link rel="prev" href="{{ . }}">{{ end }}
+{{ with .next }}<link rel="next" href="{{ . }}">{{ end }}
+<link rel="preconnect" href="{{ site.Params.media_origin }}" crossorigin>
+<meta property="og:site_name" content="{{ $site }}">
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:description" content="{{ $desc | truncate 200 }}">
+<meta property="og:url" content="{{ $canon }}">
+<meta name="twitter:title" content="{{ $title }}">
+<meta name="twitter:description" content="{{ $desc | truncate 200 }}">
+{{ if $isVideo }}
+<meta property="og:type" content="video.other">
+<meta property="og:image" content="{{ $page.Params.thumbnail }}">
+<meta property="og:video" content="{{ $page.Params.video_url }}">
+<meta property="og:video:secure_url" content="{{ $page.Params.video_url }}">
+<meta property="og:video:type" content="video/mp4">
+<meta property="video:duration" content="{{ $page.Params.duration_seconds }}">
+<meta property="video:release_date" content="{{ $page.Date.Format "2006-01-02T15:04:05Z07:00" }}">
+{{ range $page.Params.tags }}<meta property="video:tag" content="{{ . }}">
+{{ end }}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="{{ $page.Params.thumbnail }}">
+{{ $ld := dict "@context" "https://schema.org" "@type" "VideoObject"
+  "name" $page.Title "description" $page.Description
+  "thumbnailUrl" (slice $page.Params.thumbnail)
+  "uploadDate" ($page.Date.Format "2006-01-02T15:04:05Z07:00")
+  "duration" $page.Params.duration_iso "contentUrl" $page.Params.video_url
+  "url" $canon "keywords" (delimit $page.Params.tags ", ")
+  "isFamilyFriendly" false
+  "interactionStatistic" (dict "@type" "InteractionCounter" "interactionType" (dict "@type" "WatchAction") "userInteractionCount" $page.Params.views) }}
+<script type="application/ld+json">{{ $ld | jsonify | safeJS }}</script>
+{{ $bc := dict "@context" "https://schema.org" "@type" "BreadcrumbList" "itemListElement" (slice
+  (dict "@type" "ListItem" "position" 1 "name" $site "item" ("" | absURL))
+  (dict "@type" "ListItem" "position" 2 "name" $page.Title "item" $canon)) }}
+<script type="application/ld+json">{{ $bc | jsonify | safeJS }}</script>
+{{ else }}
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+{{ if $page.IsHome }}
+{{ $ws := dict "@context" "https://schema.org" "@type" "WebSite" "name" $site "url" ("" | absURL)
+  "potentialAction" (dict "@type" "SearchAction" "target" (printf "%s?q={search_term_string}" ("" | absURL)) "query-input" "required name=search_term_string") }}
+<script type="application/ld+json">{{ $ws | jsonify | safeJS }}</script>
+{{ end }}
+{{ end }}

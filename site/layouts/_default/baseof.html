@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="{{ site.Language.LanguageCode }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+{{ block "seo" . }}{{ partial "seo.html" (dict "page" . "canon" .Permalink) }}{{ end }}
+<link rel="stylesheet" href="{{ "css/site.css" | relURL }}">
+{{ block "head" . }}{{ end }}
+</head>
+{{ $f := site.Params.fuse_src }}
+<body class="{{ block "bodyclass" . }}{{ end }}" data-root="{{ "" | relURL }}" data-fuse="{{ if hasPrefix $f "http" }}{{ $f }}{{ else }}{{ $f | relURL }}{{ end }}">
+{{ partial "header.html" . }}
+{{ block "main" . }}{{ end }}
+</body>
+</html>

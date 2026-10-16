@@ -1,0 +1,3 @@
+{{- $src := .Pages.ByDate.Reverse -}}
+{{- if .IsHome }}{{ $src = (where site.RegularPages "Section" "videos").ByDate.Reverse }}{{ end -}}
+{{- return (.Paginate $src) -}}

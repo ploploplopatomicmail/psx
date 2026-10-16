@@ -1,0 +1,23 @@
+baseURL = "https://example.com/"
+title = "VideoHub"
+languageCode = "en-US"
+enableRobotsTXT = true
+buildFuture = true
+disableKinds = ["RSS"]
+
+[pagination]
+  pagerSize = 36
+
+[taxonomies]
+  tag = "tags"
+
+[sitemap]
+  changeFreq = "weekly"
+  priority = 0.5
+
+[params]
+  tagline = "Watch the latest videos"
+  description = "VideoHub: Watch the latest videos. Browse and search 2016 videos by title, tag and description."
+  adult = true            # adds rating=adult / RTA meta tags; set false if not adult content
+  media_origin = "https://pmvhavencloud.s3.eu-west-par.io.cloud.ovh.net"
+  fuse_src = "js/fuse.min.js"

@@ -26,8 +26,8 @@ FUSE_CDN = "https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"
 BASE_DIR = Path(__file__).resolve().parent
 CSV_FILE = BASE_DIR / "videos.csv"        # input, written by 1craw.py
 OUT_DIR = BASE_DIR / "site"               # Hugo project directory
-BASE_URL = "https://example.com/"
-SITE_TITLE = "VideoHub"
+BASE_URL = "https://curvymovesreels.vercel.app/"
+SITE_TITLE = "Curvy Moves Reels"
 TAGLINE = "Watch the latest videos"
 PAGE_SIZE = 36                            # videos per page on the homepage
 VENDOR_FUSE = True                       # True = download Fuse.js into static/js instead of using the CDN
@@ -107,29 +107,62 @@ def q(v):  # JSON string == valid YAML/TOML string
     return json.dumps(v, ensure_ascii=False)
 
 def write(path, text):
+    """Write `text` only if it differs from what is already on disk (an unchanged file is not
+    touched at all: same mtime, no git diff). Returns "new", "updated" or "same"."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    status = "new"
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8") == text:
+                return "same"
+        except (OSError, UnicodeDecodeError):
+            pass
+        status = "updated"
     path.write_text(text, encoding="utf-8", newline="\n")
+    return status
 
 # --------------------------------------------------------------------------- content
-def build_content(videos, out, page_size):
+def dump_front_matter(fm):
+    return "---\n" + "\n".join(f"{k}: {q(val)}" for k, val in fm.items()) + "\n---\n"
+
+def parse_front_matter(path):
+    """Read the front matter this script wrote (one `key: <json value>` per line) -> dict, or None."""
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+        if not lines or lines[0] != "---":
+            return None
+        fm = {}
+        for line in lines[1:]:
+            if line == "---":
+                return fm
+            key, sep, val = line.partition(": ")
+            if not sep:
+                return None
+            fm[key] = json.loads(val)
+    except (OSError, ValueError):
+        pass
+    return None
+
+def build_content(videos, out):
+    """Write one .md per video and return the search index.
+
+    The page list (home order, next/prev chain, search index) is built from the CSV videos PLUS every
+    .md already in content/videos whose video is no longer in the CSV, so older videos stay on the
+    site, stay searchable and stay in the next/previous chain. Older videos are never deleted; the only file
+    removed is the old copy of a video whose title or date changed (same id, new file name)."""
+    cdir = out / "content" / "videos"
+
+    # ---- 1. videos from the CSV (newest first)
     for v in videos:
         v["_dt"] = parse_date(v.get("date"), v["id"])
     videos = sorted(videos, key=lambda v: (v["_dt"], v["id"]), reverse=True)   # date DESC: newest first
-    seen, slugs = set(), []
+    seen, entries = set(), []
     for v in videos:
         # file name: <YYYYMMDDhhmmssSSS>-<title>-<id6>.md
-        s = f"{fmt_stamp(v['_dt'])}-{slugify(v.get('title', '')) or 'video'}-{v['id'][-6:]}"
-        if s in seen:
-            s = f"{s}-{v['id']}"
-        seen.add(s); slugs.append(s)
-
-    cdir = out / "content" / "videos"
-    if cdir.exists():
-        shutil.rmtree(cdir)
-    write(cdir / "_index.md", '---\ntitle: "All videos"\n---\n')
-
-    index = []
-    for i, (v, slug) in enumerate(zip(videos, slugs)):
+        slug = f"{fmt_stamp(v['_dt'])}-{slugify(v.get('title', '')) or 'video'}-{v['id'][-6:]}"
+        if slug in seen:
+            slug = f"{slug}-{v['id']}"
+        seen.add(slug)
         title = (v.get("title") or "Untitled").strip()
         raw_desc = (v.get("description") or "").strip()
         tags = [t.strip() for t in v.get("tags", []) if t.strip()]
@@ -139,6 +172,7 @@ def build_content(videos, out, page_size):
             f"Watch {title}" + (f" - {', '.join(tags[:5])}" if tags else "") +
             (f". Duration {fmt_dur(dur)}." if dur else "."))
         fm = {
+            "id": v["id"],
             "title": title,
             "description": meta_desc,
             "has_desc": has_desc,
@@ -150,23 +184,64 @@ def build_content(videos, out, page_size):
             "duration": fmt_dur(dur),
             "duration_iso": iso_dur(dur),
             "views": int(v.get("views") or 0),
-            "next_slug": slugs[i + 1] if i + 1 < len(slugs) else "",  # older
-            "prev_slug": slugs[i - 1] if i > 0 else "",               # newer
+            "next_slug": "",   # older  (filled in below)
+            "prev_slug": "",   # newer  (filled in below)
             "slug": slug,
         }
-        write(cdir / f"{slug}.md",
-              "---\n" + "\n".join(f"{k}: {q(val)}" for k, val in fm.items()) + "\n---\n")
-        index.append({"t": title, "d": raw_desc if has_desc else "", "g": tags,
-                      "u": f"videos/{slug}/", "i": fm["thumbnail"],
-                      "l": fm["duration"], "v": fm["views"]})
+        entries.append({"slug": slug, "dt": v["_dt"], "id": v["id"], "fm": fm})
+
+    # ---- 2. videos that exist only as .md files (not in the CSV any more): keep them
+    csv_ids, csv_slugs = {e["id"] for e in entries}, {e["slug"] for e in entries}
+    kept = superseded = unreadable = 0
+    if cdir.exists():
+        for f in sorted(cdir.glob("*.md")):
+            if f.name == "_index.md" or f.stem in csv_slugs:
+                continue
+            fm = parse_front_matter(f)
+            if not fm or "title" not in fm or "video_url" not in fm:
+                unreadable += 1                      # not one of ours: leave it alone
+                continue
+            if fm.get("id") in csv_ids:              # same video, but title / date changed -> new file name
+                try:
+                    f.unlink()                       # delete the old file (the new one is written below)
+                    superseded += 1
+                except OSError as err:
+                    print(f"  could not delete {f.name}: {err}")
+                continue
+            entries.append({"slug": f.stem, "dt": parse_date(fm.get("date"), fm.get("id") or ""),
+                            "id": fm.get("id") or f.stem, "fm": fm})
+            kept += 1
+
+    entries.sort(key=lambda e: (e["dt"], e["id"]), reverse=True)    # date DESC: newest first
+
+    # ---- 3. write files (only when the content changed) + search index
+    write(cdir / "_index.md", '---\ntitle: "All videos"\n---\n')
+    index, stats = [], {"new": 0, "updated": 0, "same": 0}
+    for i, e in enumerate(entries):
+        fm = e["fm"]
+        fm["next_slug"] = entries[i + 1]["slug"] if i + 1 < len(entries) else ""   # older
+        fm["prev_slug"] = entries[i - 1]["slug"] if i > 0 else ""                  # newer
+        # an existing video is rewritten only when something changed (views, or the next/prev
+        # links because a neighbour was added); otherwise the .md file is left untouched
+        stats[write(cdir / f"{e['slug']}.md", dump_front_matter(fm))] += 1
+        index.append({"t": fm["title"], "d": fm.get("description", "") if fm.get("has_desc") else "",
+                      "g": fm.get("tags", []), "u": f"videos/{e['slug']}/", "i": fm.get("thumbnail", ""),
+                      "l": fm.get("duration", ""), "v": fm.get("views", 0)})
+
+    print(f"markdown: {stats['new']} new, {stats['updated']} updated, {stats['same']} unchanged (skipped)")
+    print(f"          {len(entries)} videos total = {len(entries) - kept} from CSV + {kept} older kept from existing .md"
+          + (f" | {superseded} old file(s) deleted (title/date changed)" if superseded else "")
+          + (f" ({unreadable} unreadable .md file(s) left alone)" if unreadable else ""))
     return index
 
 def write_search_index(index, out):
     data = json.dumps(index, ensure_ascii=False, separators=(",", ":")).encode()
     write(out / "static" / "search-index.json", data.decode())          # fallback
-    (out / "static" / "search-index.json.gz").write_bytes(gzip.compress(data, 9, mtime=0))
-    print(f"search index: {len(data)/1024:.0f} KB -> "
-          f"{len(gzip.compress(data, 9))/1024:.0f} KB gzipped")
+    gz = gzip.compress(data, 9, mtime=0)
+    gz_path = out / "static" / "search-index.json.gz"
+    if not (gz_path.exists() and gz_path.read_bytes() == gz):
+        gz_path.write_bytes(gz)
+    print(f"search index: {len(data)/1024:.0f} KB -> {len(gz)/1024:.0f} KB gzipped")
 
 # --------------------------------------------------------------------------- templates
 CONFIG = """baseURL = {base}
@@ -671,16 +746,17 @@ def main():
         dest = out / "static/js/fuse.min.js"; dest.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(FUSE_CDN, dest); fuse_src = "js/fuse.min.js"
 
-    origin = "{0.scheme}://{0.netloc}".format(urlparse(videos[0].get("thumbnailUrl") or videos[0]["videoUrl"])) if videos else ""
-    write(out / "hugo.toml", CONFIG.format(
-        base=q(BASE_URL.rstrip("/") + "/"), title=q(SITE_TITLE), size=PAGE_SIZE,
-        tagline=q(TAGLINE), desc=q(f"{SITE_TITLE}: {TAGLINE}. Browse and search {len(videos)} videos by title, tag and description."),
-        origin=q(origin), fuse=q(fuse_src)))
     for path, text in T.items():
         write(out / path, text)
 
-    index = build_content(videos, out, PAGE_SIZE)
+    index = build_content(videos, out)
     write_search_index(index, out)
+
+    origin = "{0.scheme}://{0.netloc}".format(urlparse(videos[0].get("thumbnailUrl") or videos[0]["videoUrl"])) if videos else ""
+    write(out / "hugo.toml", CONFIG.format(
+        base=q(BASE_URL.rstrip("/") + "/"), title=q(SITE_TITLE), size=PAGE_SIZE,
+        tagline=q(TAGLINE), desc=q(f"{SITE_TITLE}: {TAGLINE}. Browse and search {len(index)} videos by title, tag and description."),
+        origin=q(origin), fuse=q(fuse_src)))
 
     if BUILD:
         if not shutil.which("hugo"):

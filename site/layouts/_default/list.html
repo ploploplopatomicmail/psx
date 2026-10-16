@@ -1,0 +1,15 @@
+{{ define "seo" }}{{ partial "seo-list.html" . }}{{ end }}
+{{ define "main" }}
+<main class="wrap">
+{{ if eq .Kind "taxonomy" }}
+  <h1>All tags</h1>
+  <ul class="tagcloud">{{ range .Data.Terms.Alphabetical }}<li><a href="{{ .Page.RelPermalink }}">{{ .Page.Title }} <small>{{ .Count }}</small></a></li>{{ end }}</ul>
+{{ else }}
+  {{ $pg := partial "pg.html" . }}
+  <h1>{{ if eq .Kind "term" }}{{ .Title }} videos{{ else }}{{ .Title }}{{ end }}</h1>
+  <div class="grid">{{ range $i, $p := $pg.Pages }}{{ partial "card.html" (dict "p" $p "eager" (lt $i 4)) }}{{ end }}</div>
+  {{ partial "pager.html" $pg }}
+{{ end }}
+</main>
+<script>document.addEventListener('click',function(e){if(e.target.closest('a.card')){try{sessionStorage.removeItem('ctx')}catch(_){}}});</script>
+{{ end }}

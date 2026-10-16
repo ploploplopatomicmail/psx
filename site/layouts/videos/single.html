@@ -1,0 +1,23 @@
+{{ define "bodyclass" }}vp{{ end }}
+{{ define "head" }}
+{{ with .Params.next_slug }}<link rel="prefetch" href="{{ printf "videos/%s/" . | relURL }}">{{ end }}
+{{ with .Params.prev_slug }}<link rel="prefetch" href="{{ printf "videos/%s/" . | relURL }}">{{ end }}
+{{ end }}
+{{ define "main" }}
+<main class="player" data-next="{{ with .Params.next_slug }}{{ printf "videos/%s/" . | relURL }}{{ end }}" data-prev="{{ with .Params.prev_slug }}{{ printf "videos/%s/" . | relURL }}{{ end }}">
+  <video src="{{ .Params.video_url }}" poster="{{ .Params.thumbnail }}" autoplay muted loop playsinline preload="auto"></video>
+  <article class="info">
+    <h1>{{ .Title }}</h1>
+    {{ if .Params.has_desc }}<p>{{ .Description }}</p>{{ end }}
+    <ul class="tags no-swipe">{{ range .GetTerms "tags" }}<li><a href="{{ .RelPermalink }}">#{{ .LinkTitle }}</a></li>{{ end }}</ul>
+    <small>{{ lang.FormatNumber 0 .Params.views }} views · {{ .Params.duration }}</small>
+  </article>
+  <div class="side no-swipe">
+    <button id="up" type="button" aria-label="Previous video">▲</button>
+    <button id="down" type="button" aria-label="Next video">▼</button>
+    <button id="mute" type="button" aria-label="Toggle sound">🔇</button>
+  </div>
+  <div class="bar no-swipe" id="bar"><i></i></div>
+</main>
+<script src="{{ "js/swipe.js" | relURL }}" defer></script>
+{{ end }}

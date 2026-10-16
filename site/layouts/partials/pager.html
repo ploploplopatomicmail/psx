@@ -1,0 +1,10 @@
+{{ $pg := . }}{{ if gt $pg.TotalPages 1 }}{{ $cur := $pg.PageNumber }}
+<nav class="pager" id="pager" aria-label="Pagination">
+{{ if $pg.HasPrev }}<a rel="prev" href="{{ $pg.Prev.URL }}" aria-label="Previous page">‹</a>{{ end }}
+{{ range $pg.Pagers }}{{ $n := .PageNumber }}
+{{ if or (eq $n 1) (eq $n $pg.TotalPages) (and (ge $n (sub $cur 2)) (le $n (add $cur 2))) }}
+{{ if eq $n $cur }}<span class="cur" aria-current="page">{{ $n }}</span>{{ else }}<a href="{{ .URL }}">{{ $n }}</a>{{ end }}
+{{ else if or (eq $n (sub $cur 3)) (eq $n (add $cur 3)) }}<span class="gap">…</span>{{ end }}
+{{ end }}
+{{ if $pg.HasNext }}<a rel="next" href="{{ $pg.Next.URL }}" aria-label="Next page">›</a>{{ end }}
+</nav>{{ end }}

@@ -1,0 +1,5 @@
+{{ $p := .p }}<a class="card" href="{{ $p.RelPermalink }}">
+<span class="thumb"><img src="{{ $p.Params.thumbnail }}" alt="{{ $p.Title }}" {{ if .eager }}fetchpriority="high"{{ else }}loading="lazy"{{ end }} decoding="async"><b class="dur">{{ $p.Params.duration }}</b></span>
+<span class="t">{{ $p.Title }}</span>
+<span class="m">{{ lang.FormatNumber 0 $p.Params.views }} views</span>
+</a>
